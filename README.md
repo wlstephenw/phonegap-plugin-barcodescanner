@@ -20,7 +20,7 @@ Older versions of phonegap can still install via the __deprecated__ id ( stale v
 
 It is also possible to install via repo url directly ( unstable )
 
-    phonegap plugin add https://github.com/wlstephenw/phonegap-plugin-barcodescanner.git
+    cordova plugin add https://github.com/wlstephenw/phonegap-plugin-barcodescanner.git
 
 ### Supported Platforms
 
