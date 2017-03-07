@@ -58,6 +58,8 @@
 @property (nonatomic, retain) UIViewController*           parentViewController;
 @property (nonatomic, retain) CDVbcsViewController*        viewController;
 @property (nonatomic, retain) AVCaptureSession*           captureSession;
+@property (nonatomic, retain) AVCaptureDevice*            captureDevice;
+@property (nonatomic, retain) AVCaptureMetadataOutput*    metadataOutput;
 @property (nonatomic, retain) AVCaptureVideoPreviewLayer* previewLayer;
 @property (nonatomic, retain) NSString*                   alternateXib;
 @property (nonatomic, retain) NSMutableArray*             results;
@@ -68,6 +70,7 @@
 @property (nonatomic)         BOOL                        isFrontCamera;
 @property (nonatomic)         BOOL                        isShowFlipCameraButton;
 @property (nonatomic)         BOOL                        isShowTorchButton;
+@property (nonatomic)         BOOL                        isZoomSupported;
 @property (nonatomic)         BOOL                        isFlipped;
 @property (nonatomic)         BOOL                        isTransitionAnimated;
 @property (nonatomic)         BOOL                        isSuccessBeepEnabled;
@@ -86,6 +89,7 @@
 - (zxing::Ref<zxing::LuminanceSource>) getLuminanceSourceFromSample:(CMSampleBufferRef)sampleBuffer imageBytes:(uint8_t**)ptr;
 - (UIImage*) getImageFromLuminanceSource:(zxing::LuminanceSource*)luminanceSource;
 - (void)dumpImage:(UIImage*)image;
+- (void)zoomCamera:(CGFloat)scale;
 @end
 
 //------------------------------------------------------------------------------
@@ -104,7 +108,11 @@
 //------------------------------------------------------------------------------
 // view controller for the ui
 //------------------------------------------------------------------------------
-@interface CDVbcsViewController : UIViewController <CDVBarcodeScannerOrientationDelegate> {}
+@interface CDVbcsViewController : UIViewController <CDVBarcodeScannerOrientationDelegate, UIGestureRecognizerDelegate>
+{
+    CGFloat effectiveScale;
+    CGFloat beginGestureScale;
+}
 @property (nonatomic, retain) CDVbcsProcessor*  processor;
 @property (nonatomic, retain) NSString*        alternateXib;
 @property (nonatomic)         BOOL             shutterPressed;
@@ -165,6 +173,7 @@
     BOOL preferFrontCamera = [options[@"preferFrontCamera"] boolValue];
     BOOL showFlipCameraButton = [options[@"showFlipCameraButton"] boolValue];
     BOOL showTorchButton = [options[@"showTorchButton"] boolValue];
+    BOOL zoomSupported = [options[@"zoomSupport"] boolValue];
     BOOL disableAnimations = [options[@"disableAnimations"] boolValue];
     BOOL disableSuccessBeep = [options[@"disableSuccessBeep"] boolValue];
 
@@ -199,6 +208,10 @@
 
     if (showTorchButton) {
       processor.isShowTorchButton = true;
+    }
+    
+    if (zoomSupported) {
+        processor.isZoomSupported = true;
     }
 
     processor.isSuccessBeepEnabled = !disableSuccessBeep;
@@ -283,6 +296,8 @@
 @synthesize parentViewController = _parentViewController;
 @synthesize viewController       = _viewController;
 @synthesize captureSession       = _captureSession;
+@synthesize captureDevice        = _captureDevice;
+@synthesize metadataOutput       = _metadataOutput;
 @synthesize previewLayer         = _previewLayer;
 @synthesize alternateXib         = _alternateXib;
 @synthesize is1D                 = _is1D;
@@ -323,6 +338,8 @@ parentViewController:(UIViewController*)parentViewController
     self.parentViewController = nil;
     self.viewController = nil;
     self.captureSession = nil;
+    self.captureDevice = nil;
+    self.metadataOutput = nil;
     self.previewLayer = nil;
     self.alternateXib = nil;
     self.results = nil;
@@ -478,6 +495,7 @@ parentViewController:(UIViewController*)parentViewController
         if (!device) return @"unable to obtain video capture device";
 
     }
+    self.captureDevice = device;
 
     // set focus params if available to improve focusing
     [device lockForConfiguration:&error];
@@ -532,6 +550,7 @@ parentViewController:(UIViewController*)parentViewController
                                      AVMetadataObjectTypeCode39Code,
                                      AVMetadataObjectTypeITF14Code,
                                      AVMetadataObjectTypePDF417Code]];
+    self.metadataOutput = output;
 
     // setup capture preview layer
     self.previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:captureSession];
@@ -766,6 +785,62 @@ parentViewController:(UIViewController*)parentViewController
      ];
 }
 
+- (void)zoomCamera:(CGFloat)scale {
+    // there are 2 ways to implement the zoom, howere I really do not know the difference, so I provide both here
+    // 1. Camera device zoom factor
+    
+//    static bool runOnce = false;
+//    if (!runOnce){
+//        NSError *error = nil;
+//        [self.captureDevice lockForConfiguration:&error];
+//        // sessionPreset relates to activeFormat
+//        self.captureDevice.activeFormat = [self.captureDevice.formats objectAtIndex:15];
+//        [self.captureDevice unlockForConfiguration];
+//        runOnce = true;
+//    }
+    
+    CGFloat videoMaxZoomFactor = self.captureDevice.activeFormat.videoMaxZoomFactor;
+    //NSLog(@"videoMaxZoomFactor: %f, type=%@", videoMaxZoomFactor, self.captureDevice.activeFormat);
+    if (videoMaxZoomFactor > 1.0)
+    {
+        NSError *error = nil;
+        [self.captureDevice lockForConfiguration:&error];
+        if (!error) {
+            if (1.0 < scale && scale < videoMaxZoomFactor)
+                self.captureDevice.videoZoomFactor = scale;
+            
+        }else
+        {
+            NSLog(@"error = %@", error);
+        }
+        [self.captureDevice unlockForConfiguration];
+    }
+    else
+    {
+        // alter: your phone does not support zoom
+//        UIAlertView *alertview = [[UIAlertView alloc] initWithTitle:@"tile" message:@"not support" delegate:self cancelButtonTitle:@"cancel" otherButtonTitles:@"ok", nil];
+//        [alertview show];
+    }
+    
+    
+    // 2. output scale and crop
+    //    AVCaptureConnection *metadataOutput = [self.metadataOutput connectionWithMediaType:AVMediaTypeMetadata];
+    //    CGFloat maxScaleAndCropFactor = [metadataOutput videoMaxScaleAndCropFactor];
+//    NSLog(@"maxScaleAndCropFactor: %f", maxScaleAndCropFactor);
+//    if (maxScaleAndCropFactor > 0.0)
+//    {
+//        // some device's maxScaleAndCropFactor will be zero
+//        if (scale > maxScaleAndCropFactor)
+//            scale = maxScaleAndCropFactor;
+//        [metadataOutput setVideoScaleAndCropFactor:scale];
+//        
+//        [CATransaction begin];
+//        [CATransaction setAnimationDuration:.025];
+//        [self.previewLayer setAffineTransform:CGAffineTransformMakeScale(scale, scale)];
+//        [CATransaction commit];
+//    }
+}
+
 @end
 
 //------------------------------------------------------------------------------
@@ -939,6 +1014,40 @@ parentViewController:(UIViewController*)parentViewController
   [self.processor performSelector:@selector(toggleTorch) withObject:nil afterDelay:0];
 }
 
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer
+{
+    if ( [gestureRecognizer isKindOfClass:[UIPinchGestureRecognizer class]] ) {
+        beginGestureScale = effectiveScale;
+    }
+    return YES;
+}
+
+- (void)twoFingerPinch:(UIPinchGestureRecognizer *)recognizer
+{
+    //check if we are validated.
+    //NSLog(@"Pinch scale: %f", recognizer.scale);
+    BOOL allTouchesAreOnThePreviewLayer = YES;
+    NSUInteger numTouches = [recognizer numberOfTouches], i;
+    for ( i = 0; i < numTouches; ++i ) {
+        CGPoint location = [recognizer locationOfTouch:i inView:self.view];
+        CGPoint convertedLocation = [self.view.layer convertPoint:location fromLayer:self.view.layer.superlayer];
+        if ( ! [self.view.layer containsPoint:convertedLocation] ) {
+            allTouchesAreOnThePreviewLayer = NO;
+            break;
+        }
+    }
+    
+    if (allTouchesAreOnThePreviewLayer)
+    {
+        effectiveScale = beginGestureScale * recognizer.scale;
+        // for now we do not support zoom smaller than 1.0
+        if (effectiveScale < 1.0)
+            effectiveScale = 1.0;
+        // zoom the camera...
+        [self.processor zoomCamera:effectiveScale];
+    }
+}
+
 //--------------------------------------------------------------------------
 - (UIView *)buildOverlayViewFromXib
 {
@@ -1030,6 +1139,19 @@ parentViewController:(UIViewController*)parentViewController
       [items insertObject:torchButton atIndex:0];
     }
   }
+    
+    ///// add the zoom support/////////////
+    if (_processor.isZoomSupported)
+    {
+        // add the pin gesture
+        UIPinchGestureRecognizer *twoFingerPinch =
+        [[[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(twoFingerPinch:)] autorelease];
+        [overlayView addGestureRecognizer:twoFingerPinch];
+        twoFingerPinch.delegate = self;
+        
+        effectiveScale = 1.0;
+    }
+    ///////////////////////////////////////
 
     toolbar.items = items;
 
